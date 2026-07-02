@@ -73,6 +73,7 @@ int main() {
 
     std::cout << "Executing UNfused Graph" << std::endl;
     graph.execute();
+    float unfusedMs = graph.benchExecution();
 
     std::cout << std::endl;
     std::cout << std::endl;
@@ -87,6 +88,14 @@ int main() {
 
     std::cout << "Executing FUSED Graph" << std::endl;
     graph.execute(fusionList);
+    float fusedMs   = graph.benchExecution(fusedList);
+
+    std::cout << std::endl;
+    std::cout << std::endl;
+    std::cout << "\n=== Benchmark ===" << std::endl;
+    std::cout << "Unfused: " << unfusedMs << " ms" << std::endl;
+    std::cout << "Fused:   " << fusedMs   << " ms" << std::endl;
+    std::cout << "Speedup: " << unfusedMs / fusedMs << "x" << std::endl;
 
 
     return 0;

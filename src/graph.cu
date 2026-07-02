@@ -195,6 +195,163 @@ void Graph::execute(std::vector<Node*> fusedGraphs) {
     writeVectorToFile(output.data(), output.size(), node->name+"_fusedGraph");
 }
 
+float Graph::benchExecution() {
+    if (nodeMemMap.size() < nodes.size()) {
+        nodeMemMap = nodeMem();
+    }
+
+    // warmup
+    for (int i = 0; i < sorted.size(); i++) {
+        if (sorted[i]->operation == Oper::MATMUL) {
+            int row_A = sorted[i]->inputs[0]->shape[0];
+            int N     = sorted[i]->inputs[0]->shape[1];
+            int col_B = sorted[i]->inputs[1]->shape[1];
+            matMul(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->inputs[1]->id], nodeMemMap[sorted[i]->id], row_A, N, col_B);
+        } else if (sorted[i]->operation == Oper::ADD) {
+            int height = sorted[i]->shape[0];
+            int width  = sorted[i]->shape[1];
+            matAdd(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->inputs[1]->id], nodeMemMap[sorted[i]->id], height, width);
+        } else if (sorted[i]->operation == Oper::ReLU) {
+            int height = sorted[i]->shape[0];
+            int width  = sorted[i]->shape[1];
+            matReLU(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->id], height, width);
+        }
+    }
+    cudaDeviceSynchronize();
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+    for (int run = 0; run < 100; run++) {
+        for (int i = 0; i < sorted.size(); i++) {
+            if (sorted[i]->operation == Oper::MATMUL) {
+                int row_A = sorted[i]->inputs[0]->shape[0];
+                int N     = sorted[i]->inputs[0]->shape[1];
+                int col_B = sorted[i]->inputs[1]->shape[1];
+                matMul(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->inputs[1]->id], nodeMemMap[sorted[i]->id], row_A, N, col_B);
+            } else if (sorted[i]->operation == Oper::ADD) {
+                int height = sorted[i]->shape[0];
+                int width  = sorted[i]->shape[1];
+                matAdd(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->inputs[1]->id], nodeMemMap[sorted[i]->id], height, width);
+            } else if (sorted[i]->operation == Oper::ReLU) {
+                int height = sorted[i]->shape[0];
+                int width  = sorted[i]->shape[1];
+                matReLU(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->id], height, width);
+            }
+        }
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    return ms / 100.0f;
+}
+
+float Graph::benchExecution(std::vector<Node*> fusedGraphs) {
+    nodeMemMap.clear();
+    nodeMemMap = nodeMem();
+
+    // warmup
+    for (int i = 0; i < fusedGraphs.size(); i++) {
+        if (fusedGraphs[i]->operation == Oper::INPUT) continue;
+
+        if (fusedGraphs[i]->operation == Oper::MATMUL) {
+            int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+            int N     = fusedGraphs[i]->inputs[0]->shape[1];
+            int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+            matMul(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+        } else if (fusedGraphs[i]->operation == Oper::ADD) {
+            int height = fusedGraphs[i]->shape[0];
+            int width  = fusedGraphs[i]->shape[1];
+            matAdd(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+        } else if (fusedGraphs[i]->operation == Oper::ReLU) {
+            int height = fusedGraphs[i]->shape[0];
+            int width  = fusedGraphs[i]->shape[1];
+            matReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+        } else if (fusedGraphs[i]->operation == Oper::FUSED_MR) {
+            int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+            int N     = fusedGraphs[i]->inputs[0]->shape[1];
+            int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+            matMulReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+        } else if (fusedGraphs[i]->operation == Oper::FUSED_AR) {
+            int height = fusedGraphs[i]->shape[0];
+            int width  = fusedGraphs[i]->shape[1];
+            matAddReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+        } else if (fusedGraphs[i]->operation == Oper::FUSED_MAR) {
+            int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+            int N     = fusedGraphs[i]->inputs[0]->shape[1];
+            int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+            matMulAddReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+        } else if (fusedGraphs[i]->operation == Oper::FUSED_MA) {
+            int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+            int N     = fusedGraphs[i]->inputs[0]->shape[1];
+            int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+            matMulAdd(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+        }
+    }
+    cudaDeviceSynchronize();
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+    for (int run = 0; run < 100; run++) {
+        for (int i = 0; i < fusedGraphs.size(); i++) {
+            if (fusedGraphs[i]->operation == Oper::INPUT) continue;
+
+            if (fusedGraphs[i]->operation == Oper::MATMUL) {
+                int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+                int N     = fusedGraphs[i]->inputs[0]->shape[1];
+                int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+                matMul(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+            } else if (fusedGraphs[i]->operation == Oper::ADD) {
+                int height = fusedGraphs[i]->shape[0];
+                int width  = fusedGraphs[i]->shape[1];
+                matAdd(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+            } else if (fusedGraphs[i]->operation == Oper::ReLU) {
+                int height = fusedGraphs[i]->shape[0];
+                int width  = fusedGraphs[i]->shape[1];
+                matReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+            } else if (fusedGraphs[i]->operation == Oper::FUSED_MR) {
+                int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+                int N     = fusedGraphs[i]->inputs[0]->shape[1];
+                int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+                matMulReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+            } else if (fusedGraphs[i]->operation == Oper::FUSED_AR) {
+                int height = fusedGraphs[i]->shape[0];
+                int width  = fusedGraphs[i]->shape[1];
+                matAddReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], height, width);
+            } else if (fusedGraphs[i]->operation == Oper::FUSED_MAR) {
+                int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+                int N     = fusedGraphs[i]->inputs[0]->shape[1];
+                int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+                matMulAddReLU(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+            } else if (fusedGraphs[i]->operation == Oper::FUSED_MA) {
+                int row_A = fusedGraphs[i]->inputs[0]->shape[0];
+                int N     = fusedGraphs[i]->inputs[0]->shape[1];
+                int col_B = fusedGraphs[i]->inputs[1]->shape[1];
+                matMulAdd(nodeMemMap[fusedGraphs[i]->inputs[0]->id], nodeMemMap[fusedGraphs[i]->inputs[1]->id], nodeMemMap[fusedGraphs[i]->inputs.back()->id], nodeMemMap[fusedGraphs[i]->id], row_A, N, col_B);
+            }
+        }
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    return ms / 100.0f;
+}
+
 Node* Graph::fuseNodes(std::vector<Node*> nodes2Fuse, std::vector<int>& fusedMap) {
     std::unordered_set<Node*> nodies(nodes2Fuse.begin(), nodes2Fuse.end());
     std::vector<Node*> inputting;

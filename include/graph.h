@@ -49,4 +49,8 @@ public:
     void printNode(Node* item);
 
     std::vector<Node*> topoSort(std::vector<Node*> newNodes);
+
+    float benchExecution(std::vector<Node*> fusedGraphs);
+
+    float benchExecution();
 };
