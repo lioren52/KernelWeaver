@@ -1206,6 +1206,13 @@ void Graph::compileToFile(const std::string &filename, const std::vector<Node *>
         }
     }
 
+    out << "\n    // Synchronize and check for errors\n";
+    out << "    cudaDeviceSynchronize();\n";
+    out << "    cudaError_t err = cudaGetLastError();\n";
+    out << "    if (err != cudaSuccess) {\n";
+    out << "        std::cerr << \"CUDA Error: \" << cudaGetErrorString(err) << std::endl;\n";
+    out << "        return 1;\n";
+    out << "    }\n";
     out << "\n    // Synchronize Streams\n";
     for (int i = 0; i < numStreams; i++) {
         out << "    cudaStreamSynchronize(stream_" << i << ");\n";
