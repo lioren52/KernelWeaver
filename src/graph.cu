@@ -357,8 +357,6 @@ void Graph::execute() {
 
   Node *node = getOutput();
   std::vector<float> output(node->shape[0] * node->shape[1]);
-  std::cout << std::endl;
-  std::cout << "Final Node: " << node->name << std::endl;
   cudaMemcpy(output.data(), nodeMemMap[node->id],
              node->shape[0] * node->shape[1] * sizeof(float),
              cudaMemcpyDeviceToHost);
@@ -412,15 +410,12 @@ void Graph::execute(std::vector<Node *> fusedGraphs) {
     cudaStreamSynchronize(streams[i]);
   }
 
-  Node *node = fusedGraphs[fusedGraphs.size() - 1];
+  Node *node = fusedGraphs.back();
   std::vector<float> output(node->shape[0] * node->shape[1]);
-  std::cout << std::endl;
-  std::cout << "Final Node: " << node->name << std::endl;
   cudaMemcpy(output.data(), nodeMemMap[node->id],
              node->shape[0] * node->shape[1] * sizeof(float),
              cudaMemcpyDeviceToHost);
-  writeVectorToFile(output.data(), output.size(),
-                    node->name + "_fusedGraph.bin");
+  writeVectorToFile(output.data(), output.size(), node->name + "_fusedGraph.bin");
 }
 
 float Graph::benchExecution() {
@@ -1211,10 +1206,10 @@ void Graph::compileToFile(const std::string &filename, const std::vector<Node *>
     out << "    std::vector<float> output(" << (outNode->shape[0] * outNode->shape[1]) << ");\n";
     out << "    cudaMemcpy(output.data(), mem_" << outNode->id << ", " << outBytes << ", cudaMemcpyDeviceToHost);\n";
     out << "    writeVectorToFile(output.data(), output.size(), \"" << outNode->name << "_static.bin\");\n";
-    out << "    std::cout << \"Successfully executed static graph! Output written to " << outNode->name << "_static.bin\\n\";\n";
+    out << "    std::cout << \"[Codegen Executable] Output successfully written to " << outNode->name << "_static.bin\\n\";\n";
     
     out << "\n    return 0;\n";
     out << "}\n";
     out.close();
-    std::cout << "Successfully generated " << filename << "\n";
+    std::cout << "[Codegen] Successfully generated statically compiled file: " << filename << "\n";
 }

@@ -23,10 +23,10 @@ int main(int argc, char** argv) {
     }
 
     if (graphFile != "") {
-        std::cout << "Loading graph from " << graphFile << std::endl;
+        std::cout << "[Graph Compiler] Loading graph from " << graphFile << std::endl;
         graph.loadFromFile(graphFile);
     } else {
-        std::cout << "No graph file provided, using hardcoded benchmark graph." << std::endl;
+        std::cout << "[Graph Compiler] No graph file provided, using hardcoded benchmark graph." << std::endl;
         int DIM = 4096;
         
         // Base Input 
@@ -86,45 +86,38 @@ int main(int argc, char** argv) {
         graph.setOutput(final_out);
     }
     std::vector<Node*> topoS = graph.topoSort();
-    std::cout << "----------------------Topological Sort----------------------" << std::endl;
-    std::cout << std::endl;
-    std::cout << std::endl;
+    std::cout << "[Graph Compiler] Topological sort completed (" << topoS.size() << " nodes)." << std::endl;
+
     if (graphFile == "") {
-        std::cout << "Running Input layers generation" << std::endl;
+        std::cout << "[Graph Compiler] Generating random fallback inputs..." << std::endl;
         graph.generator();
     } else {
-        std::cout << "Skipping random generation (using loaded weights)" << std::endl;
+        std::cout << "[Graph Compiler] Using loaded weights from binary files." << std::endl;
     }
 
-    std::cout << "Executing UNfused Graph" << std::endl;
+    std::cout << "\n--- Baseline Execution (Unfused) ---" << std::endl;
     graph.execute();
     float unfusedMs = graph.benchExecution();
 
-    std::cout << std::endl;
-    std::cout << std::endl;
-    std::cout << "------------Fusion Pass------------" << std::endl;
+    std::cout << "\n--- Optimization Pass ---" << std::endl;
     std::vector<Node*> fusionList = graph.fusionPass();
-    std::cout << std::endl;
-    std::cout << std::endl;
-    std::cout << "Total Nodes Before Fusion: " << topoS.size() << std::endl;
-    std::cout << "Total Nodes After Fusion: " << fusionList.size() << std::endl;
-    std::cout << std::endl;
-    std::cout << std::endl;
+    std::cout << "[Optimizer] Fused nodes from " << topoS.size() << " down to " << fusionList.size() << "!" << std::endl;
 
     if (codegen) {
-        std::cout << "Running CODEGEN Pass..." << std::endl;
+        std::cout << "\n--- Static Codegen Pass ---" << std::endl;
         graph.compileToFile("generated_model.cu", fusionList, standalone);
     } else {
-        std::cout << "Executing FUSED Graph" << std::endl;
+        std::cout << "\n--- Fused Execution ---" << std::endl;
         graph.execute(fusionList);
         float fusedMs   = graph.benchExecution(fusionList);
 
-        std::cout << std::endl;
-        std::cout << std::endl;
-        std::cout << "\n=== Benchmark ===" << std::endl;
-        std::cout << "Unfused: " << unfusedMs << " ms" << std::endl;
-        std::cout << "Fused:   " << fusedMs   << " ms" << std::endl;
-        std::cout << "Speedup: " << unfusedMs / fusedMs << "x" << std::endl;
+        std::cout << "\n=====================================" << std::endl;
+        std::cout << "          PERFORMANCE REPORT         " << std::endl;
+        std::cout << "=====================================" << std::endl;
+        std::cout << " Baseline: " << unfusedMs << " ms" << std::endl;
+        std::cout << " Fused:    " << fusedMs   << " ms" << std::endl;
+        std::cout << " Speedup:  " << unfusedMs / fusedMs << "x" << std::endl;
+        std::cout << "=====================================\n" << std::endl;
     }
 
 
