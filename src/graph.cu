@@ -500,6 +500,14 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
 
   cudaStreamBeginCapture(streams[0], cudaStreamCaptureModeGlobal);
 
+  // Fork: make all other streams enter capture mode by waiting on an event recorded in stream 0
+  cudaEvent_t forkEvent;
+  cudaEventCreateWithFlags(&forkEvent, cudaEventDisableTiming);
+  cudaEventRecord(forkEvent, streams[0]);
+  for (int s = 1; s < numStreams; s++) {
+    cudaStreamWaitEvent(streams[s], forkEvent, 0);
+  }
+
   for (int i = inputTill; i < fusedGraphs.size(); i++) {
     Node *n = fusedGraphs[i];
     int sid = nodeStreamId.count(n->id) ? nodeStreamId[n->id] : 0;
@@ -530,6 +538,7 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
   for (auto ev : captureSyncEvents) {
     cudaEventDestroy(ev);
   }
+  cudaEventDestroy(forkEvent);
 
   // warmup
   cudaGraphLaunch(graphExec, streams[0]);
