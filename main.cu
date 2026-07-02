@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
 
     if (codegen) {
         std::cout << "Running CODEGEN Pass..." << std::endl;
-        graph.compileToFile("generated_model.cu", standalone, true);
+        graph.compileToFile("generated_model.cu", fusionList, standalone);
     } else {
         std::cout << "Executing FUSED Graph" << std::endl;
         graph.execute(fusionList);

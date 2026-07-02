@@ -34,7 +34,7 @@ public:
 
   void execute();
   void execute(std::vector<Node *> fusedGraphs);
-  void compileToFile(const std::string &filename, bool standalone, bool fused = true);
+  void compileToFile(const std::string &filename, const std::vector<Node *> &schedule, bool standalone);
 
   void setOutput(Node *node);
 
