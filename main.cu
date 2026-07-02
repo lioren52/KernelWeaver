@@ -7,57 +7,61 @@
 int main() {
     Graph graph;
 
-    // Base Input (Simulating an embedding vector)
-    Node* input_X = graph.addInput("Input_X", {256, 1});
+    int DIM = 4096;
+    
+    // Base Input 
+    Node* input_X = graph.addInput("Input_X", {DIM, 1});
 
-    // =======================================================
-    // Branch 1: Standard Fusable Block
-    // =======================================================
-    Node* w1 = graph.addInput("W1", {128, 256});
-    Node* b1 = graph.addInput("B1", {128, 1});
+    // --- Block 1: Massive Projection ---
+    Node* w1 = graph.addInput("W1", {DIM, DIM});
+    Node* b1 = graph.addInput("B1", {DIM, 1});
     Node* matmul1 = graph.addNode("MatMul_1", Oper::MATMUL, {w1, input_X});
     Node* add1    = graph.addNode("Add_1", Oper::ADD, {matmul1, b1});
     Node* relu1   = graph.addNode("ReLU_1", Oper::ReLU, {add1});
 
-    // =======================================================
-    // Branch 2: Deep Fusable Pipeline (Sequential Fusions)
-    // =======================================================
-    Node* w2a = graph.addInput("W2a", {512, 256});
-    Node* b2a = graph.addInput("B2a", {512, 1});
-    Node* matmul2a = graph.addNode("MatMul_2a", Oper::MATMUL, {w2a, input_X});
+    // --- Block 2: The Parallel Width Test ---
+    // Branch A
+    Node* w2a = graph.addInput("W2a", {DIM, DIM});
+    Node* b2a = graph.addInput("B2a", {DIM, 1});
+    Node* matmul2a = graph.addNode("MatMul_2a", Oper::MATMUL, {w2a, relu1});
     Node* add2a    = graph.addNode("Add_2a", Oper::ADD, {matmul2a, b2a});
     Node* relu2a   = graph.addNode("ReLU_2a", Oper::ReLU, {add2a});
 
-    Node* w2b = graph.addInput("W2b", {128, 512});
-    Node* b2b = graph.addInput("B2b", {128, 1});
-    Node* matmul2b = graph.addNode("MatMul_2b", Oper::MATMUL, {w2b, relu2a});
+    // Branch B
+    Node* w2b = graph.addInput("W2b", {DIM, DIM});
+    Node* b2b = graph.addInput("B2b", {DIM, 1});
+    Node* matmul2b = graph.addNode("MatMul_2b", Oper::MATMUL, {w2b, relu1});
     Node* add2b    = graph.addNode("Add_2b", Oper::ADD, {matmul2b, b2b});
     Node* relu2b   = graph.addNode("ReLU_2b", Oper::ReLU, {add2b});
-
-    // =======================================================
-    // Branch 3: The Unfusable Split (Fusion Trap)
-    // =======================================================
-    // MatMul_3 branches out to TWO different consumers. 
-    // It must NOT fuse, or it will corrupt the data flow.
-    Node* w3 = graph.addInput("W3", {128, 256});
-    Node* matmul3 = graph.addNode("MatMul_3", Oper::MATMUL, {w3, input_X});
     
-    Node* b3_A = graph.addInput("B3_A", {128, 1});
-    Node* add3_A  = graph.addNode("Add_3A", Oper::ADD, {matmul3, b3_A});
-    Node* relu3_A = graph.addNode("ReLU_3A", Oper::ReLU, {add3_A});
+    // Branch C
+    Node* w2c = graph.addInput("W2c", {DIM, DIM});
+    Node* b2c = graph.addInput("B2c", {DIM, 1});
+    Node* matmul2c = graph.addNode("MatMul_2c", Oper::MATMUL, {w2c, relu1});
+    Node* add2c    = graph.addNode("Add_2c", Oper::ADD, {matmul2c, b2c});
+    Node* relu2c   = graph.addNode("ReLU_2c", Oper::ReLU, {add2c});
 
-    Node* b3_B = graph.addInput("B3_B", {128, 1});
-    Node* add3_B  = graph.addNode("Add_3B", Oper::ADD, {matmul3, b3_B});
-    Node* relu3_B = graph.addNode("ReLU_3B", Oper::ReLU, {add3_B});
+    // --- Merge Parallel Branches ---
+    Node* merge_AB = graph.addNode("Merge_AB", Oper::ADD, {relu2a, relu2b});
+    Node* merge_ABC = graph.addNode("Merge_ABC", Oper::ADD, {merge_AB, relu2c});
+    Node* relu_merge = graph.addNode("ReLU_Merge", Oper::ReLU, {merge_ABC});
 
-    // =======================================================
-    // Merge Layer: Combine all paths back together
-    // =======================================================
-    Node* merge_1_2 = graph.addNode("Merge_1_2", Oper::ADD, {relu1, relu2b});
-    Node* merge_3   = graph.addNode("Merge_3", Oper::ADD, {relu3_A, relu3_B});
-    
-    Node* final_add = graph.addNode("Final_Add", Oper::ADD, {merge_1_2, merge_3});
-    Node* final_out = graph.addNode("Final_ReLU", Oper::ReLU, {final_add});
+    // --- Block 3: Deep Sequential Bottleneck ---
+    Node* w3a = graph.addInput("W3a", {DIM/2, DIM});
+    Node* b3a = graph.addInput("B3a", {DIM/2, 1});
+    Node* matmul3a = graph.addNode("MatMul_3a", Oper::MATMUL, {w3a, relu_merge});
+    Node* add3a    = graph.addNode("Add_3a", Oper::ADD, {matmul3a, b3a});
+    Node* relu3a   = graph.addNode("ReLU_3a", Oper::ReLU, {add3a});
+
+    Node* w3b = graph.addInput("W3b", {DIM, DIM/2});
+    Node* b3b = graph.addInput("B3b", {DIM, 1});
+    Node* matmul3b = graph.addNode("MatMul_3b", Oper::MATMUL, {w3b, relu3a});
+    Node* add3b    = graph.addNode("Add_3b", Oper::ADD, {matmul3b, b3b});
+    Node* relu3b   = graph.addNode("ReLU_3b", Oper::ReLU, {add3b});
+
+    // --- Final Residual Add (Skipping all of Block 2 and 3) ---
+    Node* final_res = graph.addNode("Final_Residual", Oper::ADD, {relu1, relu3b});
+    Node* final_out = graph.addNode("Final_Out", Oper::ReLU, {final_res});
 
     graph.setOutput(final_out);
     std::vector<Node*> topoS = graph.topoSort();
