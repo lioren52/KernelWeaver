@@ -136,7 +136,6 @@ void Graph::assignStreams(const std::vector<Node *> &schedule) {
   }
 
   // Second pass: assign streams based on dependency structure
-  int nextFreeStream = 1; // stream 0 is the "main" stream
   for (Node *n : schedule) {
     if (n->operation == Oper::INPUT)
       continue;
@@ -336,13 +335,13 @@ void Graph::execute() {
           sorted[i]->shape[0] * sorted[i]->shape[1] * sizeof(float);
       
       std::string filename = sorted[i]->name + ".bin";
-      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
-      
-      // If the input file (like dynamic X.bin) doesn't exist, generate it on the fly!
-      if (cont.empty()) {
+      std::ifstream file(filename);
+      if (!file.good()) {
           generateAndSaveInput(sorted[i]);
-          cont = readFloatsFromFile(filename, byteSize);
+      } else {
+          file.close();
       }
+      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
 
       cudaMemcpy(nodeMemMap[sorted[i]->id], cont.data(), byteSize,
                  cudaMemcpyHostToDevice);
@@ -381,12 +380,13 @@ void Graph::execute(std::vector<Node *> fusedGraphs) {
           fusedGraphs[i]->shape[0] * fusedGraphs[i]->shape[1] * sizeof(float);
       
       std::string filename = fusedGraphs[i]->name + ".bin";
-      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
-      
-      if (cont.empty()) {
+      std::ifstream file(filename);
+      if (!file.good()) {
           generateAndSaveInput(fusedGraphs[i]);
-          cont = readFloatsFromFile(filename, byteSize);
+      } else {
+          file.close();
       }
+      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
 
       cudaMemcpy(nodeMemMap[fusedGraphs[i]->id], cont.data(), byteSize,
                  cudaMemcpyHostToDevice);
