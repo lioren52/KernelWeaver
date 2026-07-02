@@ -57,16 +57,14 @@ std::vector<float> readFloatsFromFile(std::string filename, size_t bytes_to_read
 }
 
 void writeVectorToFile(const float *data, int N, const std::string& filename) {
-    std::ofstream outFile(filename);
+    std::ofstream outFile(filename, std::ios::binary);
 
     if (!outFile.is_open()) {
         std::cerr << "Error: Could not open file '" << filename << "' for writing." << std::endl;
         return;
     }
 
-    for (int i = 0; i < N; i++) {
-        outFile << data[i] << "\n";
-    }
+    outFile.write(reinterpret_cast<const char*>(data), N * sizeof(float));
 
     outFile.close();
     std::cout << "Successfully wrote " << N << " elements to " << filename << std::endl;
