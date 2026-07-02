@@ -334,8 +334,15 @@ void Graph::execute() {
     if (sorted[i]->operation == Oper::INPUT) {
       size_t byteSize =
           sorted[i]->shape[0] * sorted[i]->shape[1] * sizeof(float);
-      std::vector<float> cont =
-          readFloatsFromFile(sorted[i]->name + ".bin", byteSize);
+      
+      std::string filename = sorted[i]->name + ".bin";
+      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
+      
+      // If the input file (like dynamic X.bin) doesn't exist, generate it on the fly!
+      if (cont.empty()) {
+          generateAndSaveInput(sorted[i]);
+          cont = readFloatsFromFile(filename, byteSize);
+      }
 
       cudaMemcpy(nodeMemMap[sorted[i]->id], cont.data(), byteSize,
                  cudaMemcpyHostToDevice);
@@ -372,8 +379,14 @@ void Graph::execute(std::vector<Node *> fusedGraphs) {
     if (fusedGraphs[i]->operation == Oper::INPUT) {
       size_t byteSize =
           fusedGraphs[i]->shape[0] * fusedGraphs[i]->shape[1] * sizeof(float);
-      std::vector<float> cont =
-          readFloatsFromFile(fusedGraphs[i]->name + ".bin", byteSize);
+      
+      std::string filename = fusedGraphs[i]->name + ".bin";
+      std::vector<float> cont = readFloatsFromFile(filename, byteSize);
+      
+      if (cont.empty()) {
+          generateAndSaveInput(fusedGraphs[i]);
+          cont = readFloatsFromFile(filename, byteSize);
+      }
 
       cudaMemcpy(nodeMemMap[fusedGraphs[i]->id], cont.data(), byteSize,
                  cudaMemcpyHostToDevice);
