@@ -44,6 +44,8 @@ public:
 
   Node *addNode(std::string nm, Oper op, std::vector<Node *> in);
 
+  void loadFromFile(const std::string &filename);
+
   void printGraph();
 
   std::vector<Node *> topoSort();

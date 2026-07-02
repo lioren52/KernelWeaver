@@ -15,6 +15,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <fstream>
+#include <sstream>
 
 float *Graph::bufferAlloc(Node *node) {
   float *address;
@@ -826,6 +828,59 @@ Node *Graph::addNode(std::string nm, Oper op, std::vector<Node *> in) {
   nodes.push_back(std::move(newNode));
 
   return raw;
+}
+
+void Graph::loadFromFile(const std::string &filename) {
+  std::ifstream file(filename);
+  if (!file.is_open()) {
+    std::cout << "Failed to open IR file: " << filename << std::endl;
+    return;
+  }
+
+  std::string line;
+  std::unordered_map<std::string, Node*> nameToNode;
+
+  while (std::getline(file, line)) {
+    if (line.empty()) continue;
+    std::stringstream ss(line);
+    std::string type;
+    ss >> type;
+
+    if (type == "INPUT") {
+      std::string name;
+      int d1, d2;
+      ss >> name >> d1 >> d2;
+      Node* n = addInput(name, {d1, d2});
+      nameToNode[name] = n;
+    } else if (type == "OUTPUT") {
+      std::string name;
+      ss >> name;
+      if (nameToNode.count(name)) {
+        setOutput(nameToNode[name]);
+      }
+    } else {
+      // Operations: MATMUL, ADD, RELU
+      std::string outName;
+      ss >> outName;
+      
+      std::vector<Node*> inputs;
+      std::string inName;
+      while (ss >> inName) {
+        if (nameToNode.count(inName)) {
+          inputs.push_back(nameToNode[inName]);
+        }
+      }
+
+      Oper op;
+      if (type == "MATMUL") op = Oper::MATMUL;
+      else if (type == "ADD") op = Oper::ADD;
+      else if (type == "RELU") op = Oper::ReLU;
+      else continue;
+
+      Node* n = addNode(outName, op, inputs);
+      nameToNode[outName] = n;
+    }
+  }
 }
 
 void Graph::printGraph() {

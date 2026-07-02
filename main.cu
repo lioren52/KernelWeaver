@@ -4,13 +4,18 @@
 #include <graph.h>
 #include <node.h>
 
-int main() {
+int main(int argc, char** argv) {
     Graph graph;
 
-    int DIM = 4096;
-    
-    // Base Input 
-    Node* input_X = graph.addInput("Input_X", {DIM, 1});
+    if (argc > 1) {
+        std::cout << "Loading graph from " << argv[1] << std::endl;
+        graph.loadFromFile(argv[1]);
+    } else {
+        std::cout << "No graph file provided, using hardcoded benchmark graph." << std::endl;
+        int DIM = 4096;
+        
+        // Base Input 
+        Node* input_X = graph.addInput("Input_X", {DIM, 1});
 
     // --- Block 1: Massive Projection ---
     Node* w1 = graph.addInput("W1", {DIM, DIM});
@@ -63,13 +68,18 @@ int main() {
     Node* final_res = graph.addNode("Final_Residual", Oper::ADD, {relu1, relu3b});
     Node* final_out = graph.addNode("Final_Out", Oper::ReLU, {final_res});
 
-    graph.setOutput(final_out);
+        graph.setOutput(final_out);
+    }
     std::vector<Node*> topoS = graph.topoSort();
     std::cout << "----------------------Topological Sort----------------------" << std::endl;
     std::cout << std::endl;
     std::cout << std::endl;
-    std::cout << "Running Input layers generation" << std::endl;
-    graph.generator();
+    if (argc <= 1) {
+        std::cout << "Running Input layers generation" << std::endl;
+        graph.generator();
+    } else {
+        std::cout << "Skipping random generation (using loaded weights)" << std::endl;
+    }
 
     std::cout << "Executing UNfused Graph" << std::endl;
     graph.execute();
