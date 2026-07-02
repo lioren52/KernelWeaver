@@ -33,8 +33,8 @@ public:
   void generator();
 
   void execute();
-
   void execute(std::vector<Node *> fusedGraphs);
+  void compileToFile(const std::string &filename, bool standalone, bool fused = true);
 
   void setOutput(Node *node);
 

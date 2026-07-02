@@ -7,9 +7,24 @@
 int main(int argc, char** argv) {
     Graph graph;
 
-    if (argc > 1) {
-        std::cout << "Loading graph from " << argv[1] << std::endl;
-        graph.loadFromFile(argv[1]);
+    bool codegen = false;
+    bool standalone = false;
+    std::string graphFile = "";
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--codegen") {
+            codegen = true;
+        } else if (arg == "--standalone") {
+            standalone = true;
+        } else {
+            graphFile = arg;
+        }
+    }
+
+    if (graphFile != "") {
+        std::cout << "Loading graph from " << graphFile << std::endl;
+        graph.loadFromFile(graphFile);
     } else {
         std::cout << "No graph file provided, using hardcoded benchmark graph." << std::endl;
         int DIM = 4096;
@@ -74,7 +89,7 @@ int main(int argc, char** argv) {
     std::cout << "----------------------Topological Sort----------------------" << std::endl;
     std::cout << std::endl;
     std::cout << std::endl;
-    if (argc <= 1) {
+    if (graphFile == "") {
         std::cout << "Running Input layers generation" << std::endl;
         graph.generator();
     } else {
@@ -96,16 +111,21 @@ int main(int argc, char** argv) {
     std::cout << std::endl;
     std::cout << std::endl;
 
-    std::cout << "Executing FUSED Graph" << std::endl;
-    graph.execute(fusionList);
-    float fusedMs   = graph.benchExecution(fusionList);
+    if (codegen) {
+        std::cout << "Running CODEGEN Pass..." << std::endl;
+        graph.compileToFile("generated_model.cu", standalone, true);
+    } else {
+        std::cout << "Executing FUSED Graph" << std::endl;
+        graph.execute(fusionList);
+        float fusedMs   = graph.benchExecution(fusionList);
 
-    std::cout << std::endl;
-    std::cout << std::endl;
-    std::cout << "\n=== Benchmark ===" << std::endl;
-    std::cout << "Unfused: " << unfusedMs << " ms" << std::endl;
-    std::cout << "Fused:   " << fusedMs   << " ms" << std::endl;
-    std::cout << "Speedup: " << unfusedMs / fusedMs << "x" << std::endl;
+        std::cout << std::endl;
+        std::cout << std::endl;
+        std::cout << "\n=== Benchmark ===" << std::endl;
+        std::cout << "Unfused: " << unfusedMs << " ms" << std::endl;
+        std::cout << "Fused:   " << fusedMs   << " ms" << std::endl;
+        std::cout << "Speedup: " << unfusedMs / fusedMs << "x" << std::endl;
+    }
 
 
     return 0;
