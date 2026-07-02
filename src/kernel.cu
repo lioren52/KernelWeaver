@@ -40,6 +40,11 @@ __global__ void matrixMulFast(float *A, float *B, float *C, int M, int K,
 
   int total_threads = blockDim.x * blockDim.y; // 256
 
+  // Alignment flags: float4 loads require 16-byte aligned addresses.
+  // If row stride (K for A, N for B) is not a multiple of 4, rows will be misaligned.
+  bool a_aligned = (K % 4 == 0);
+  bool b_aligned = (N % 4 == 0);
+
   int num_full_phases = K / BK; // phases where the whole BK tile fits
   int remainder = K % BK;       // leftover columns
 
@@ -55,7 +60,7 @@ __global__ void matrixMulFast(float *A, float *B, float *C, int M, int K,
       int global_row = blockIdx.y * BM + row;
       int global_col = ph * BK + col4 * 4;
 
-      if (global_row < M && global_col + 3 < K) {
+      if (a_aligned && global_row < M && global_col + 3 < K) {
         // fully in-bounds: vectorized load
         float4 tmp =
             reinterpret_cast<float4 *>(&A[global_row * K + global_col])[0];
@@ -82,7 +87,7 @@ __global__ void matrixMulFast(float *A, float *B, float *C, int M, int K,
       int global_row = ph * BK + row;
       int global_col = blockIdx.x * BN + col4 * 4;
 
-      if (global_row < K && global_col + 3 < N) {
+      if (b_aligned && global_row < K && global_col + 3 < N) {
         float4 tmp =
             reinterpret_cast<float4 *>(&B[global_row * N + global_col])[0];
         Bs[row][col4 * 4 + 0] = tmp.x;
@@ -279,6 +284,8 @@ __global__ void matrixMulFastReLU(float *A, float *B, float *C, int M, int K,
   float reg_C[TM][TN] = {0.0f};
   float reg_A[TM], reg_B[TN];
   int total_threads = blockDim.x * blockDim.y;
+  bool a_aligned = (K % 4 == 0);
+  bool b_aligned = (N % 4 == 0);
   int num_full_phases = K / BK;
   int remainder = K % BK;
 
@@ -287,7 +294,7 @@ __global__ void matrixMulFastReLU(float *A, float *B, float *C, int M, int K,
       int idx = tid + i * total_threads, row = idx / (BK / 4),
           col4 = idx % (BK / 4);
       int gr = blockIdx.y * BM + row, gc = ph * BK + col4 * 4;
-      if (gr < M && gc + 3 < K) {
+      if (a_aligned && gr < M && gc + 3 < K) {
         float4 tmp = reinterpret_cast<float4 *>(&A[gr * K + gc])[0];
         As[row][col4 * 4 + 0] = tmp.x;
         As[row][col4 * 4 + 1] = tmp.y;
@@ -304,7 +311,7 @@ __global__ void matrixMulFastReLU(float *A, float *B, float *C, int M, int K,
       int idx = tid + i * total_threads, row = idx / (BN / 4),
           col4 = idx % (BN / 4);
       int gr = ph * BK + row, gc = blockIdx.x * BN + col4 * 4;
-      if (gr < K && gc + 3 < N) {
+      if (b_aligned && gr < K && gc + 3 < N) {
         float4 tmp = reinterpret_cast<float4 *>(&B[gr * N + gc])[0];
         Bs[row][col4 * 4 + 0] = tmp.x;
         Bs[row][col4 * 4 + 1] = tmp.y;
@@ -442,6 +449,8 @@ __global__ void matrixMulFastAdd(float *A, float *B, float *Bias, float *C,
   float reg_C[TM][TN] = {0.0f};
   float reg_A[TM], reg_B[TN];
   int total_threads = blockDim.x * blockDim.y;
+  bool a_aligned = (K % 4 == 0);
+  bool b_aligned = (N % 4 == 0);
   int num_full_phases = K / BK;
   int remainder = K % BK;
 
@@ -450,7 +459,7 @@ __global__ void matrixMulFastAdd(float *A, float *B, float *Bias, float *C,
       int idx = tid + i * total_threads, row = idx / (BK / 4),
           col4 = idx % (BK / 4);
       int gr = blockIdx.y * BM + row, gc = ph * BK + col4 * 4;
-      if (gr < M && gc + 3 < K) {
+      if (a_aligned && gr < M && gc + 3 < K) {
         float4 tmp = reinterpret_cast<float4 *>(&A[gr * K + gc])[0];
         As[row][col4 * 4 + 0] = tmp.x;
         As[row][col4 * 4 + 1] = tmp.y;
@@ -467,7 +476,7 @@ __global__ void matrixMulFastAdd(float *A, float *B, float *Bias, float *C,
       int idx = tid + i * total_threads, row = idx / (BN / 4),
           col4 = idx % (BN / 4);
       int gr = ph * BK + row, gc = blockIdx.x * BN + col4 * 4;
-      if (gr < K && gc + 3 < N) {
+      if (b_aligned && gr < K && gc + 3 < N) {
         float4 tmp = reinterpret_cast<float4 *>(&B[gr * N + gc])[0];
         Bs[row][col4 * 4 + 0] = tmp.x;
         Bs[row][col4 * 4 + 1] = tmp.y;
@@ -563,6 +572,8 @@ __global__ void matrixMulFastAddReLU(float *A, float *B, float *Bias, float *C,
   float reg_C[TM][TN] = {0.0f};
   float reg_A[TM], reg_B[TN];
   int total_threads = blockDim.x * blockDim.y;
+  bool a_aligned = (K % 4 == 0);
+  bool b_aligned = (N % 4 == 0);
   int num_full_phases = K / BK;
   int remainder = K % BK;
 
@@ -571,7 +582,7 @@ __global__ void matrixMulFastAddReLU(float *A, float *B, float *Bias, float *C,
       int idx = tid + i * total_threads, row = idx / (BK / 4),
           col4 = idx % (BK / 4);
       int gr = blockIdx.y * BM + row, gc = ph * BK + col4 * 4;
-      if (gr < M && gc + 3 < K) {
+      if (a_aligned && gr < M && gc + 3 < K) {
         float4 tmp = reinterpret_cast<float4 *>(&A[gr * K + gc])[0];
         As[row][col4 * 4 + 0] = tmp.x;
         As[row][col4 * 4 + 1] = tmp.y;
@@ -588,7 +599,7 @@ __global__ void matrixMulFastAddReLU(float *A, float *B, float *Bias, float *C,
       int idx = tid + i * total_threads, row = idx / (BN / 4),
           col4 = idx % (BN / 4);
       int gr = ph * BK + row, gc = blockIdx.x * BN + col4 * 4;
-      if (gr < K && gc + 3 < N) {
+      if (b_aligned && gr < K && gc + 3 < N) {
         float4 tmp = reinterpret_cast<float4 *>(&B[gr * N + gc])[0];
         Bs[row][col4 * 4 + 0] = tmp.x;
         Bs[row][col4 * 4 + 1] = tmp.y;
