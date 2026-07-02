@@ -25,6 +25,40 @@ float *Graph::bufferAlloc(Node *node) {
   return address;
 }
 
+std::unordered_map<int, float *>
+Graph::nodeMem(const std::vector<Node *> &schedule) {
+  std::unordered_map<int, float *> mp;
+  std::map<size_t, std::vector<float *>> freePool;
+  std::unordered_map<int, int> outDegree;
+
+  for (Node *n : schedule) {
+    for (Node *inp : n->inputs) {
+      outDegree[inp->id]++;
+    }
+  }
+
+  for (Node *n : schedule) {
+    size_t byteSize = n->shape[0] * n->shape[1] * sizeof(float);
+
+    if (!freePool[byteSize].empty()) {
+      mp[n->id] = freePool[byteSize].back();
+      freePool[byteSize].pop_back();
+    } else {
+      mp[n->id] = bufferAlloc(n);
+    }
+
+    for (Node *inp : n->inputs) {
+      outDegree[inp->id]--;
+      if (outDegree[inp->id] == 0 && inp->operation != Oper::INPUT) {
+        size_t inpSize = inp->shape[0] * inp->shape[1] * sizeof(float);
+        freePool[inpSize].push_back(mp[inp->id]);
+      }
+    }
+  }
+
+  return mp;
+}
+
 std::unordered_map<int, float *> Graph::nodeMem() {
   std::unordered_map<int, float *> mp;
 
@@ -173,11 +207,20 @@ void Graph::destroyStreams() {
   numStreams = 0;
 }
 
+void Graph::freeMem() {
+  std::unordered_set<float *> uniquePtrs;
+  for (auto &kv : nodeMemMap) {
+    uniquePtrs.insert(kv.second);
+  }
+  for (float *ptr : uniquePtrs) {
+    cudaFree(ptr);
+  }
+  nodeMemMap.clear();
+}
+
 Graph::~Graph() {
   destroyStreams();
-  for (auto &kv : nodeMemMap) {
-    cudaFree(kv.second);
-  }
+  freeMem();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,7 +315,8 @@ static void syncMergePoint(Node *node, std::unordered_map<int, int> &streamMap,
 
 void Graph::execute() {
   if (nodeMemMap.size() < nodes.size()) {
-    nodeMemMap = nodeMem();
+    freeMem();
+    nodeMemMap = nodeMem(sorted);
   }
   int inputTill = 0;
 
@@ -306,8 +350,8 @@ void Graph::execute() {
 }
 
 void Graph::execute(std::vector<Node *> fusedGraphs) {
-  nodeMemMap.clear();
-  nodeMemMap = nodeMem();
+  freeMem();
+  nodeMemMap = nodeMem(fusedGraphs);
 
   // Assign streams for parallel execution
   assignStreams(fusedGraphs);
@@ -358,15 +402,30 @@ void Graph::execute(std::vector<Node *> fusedGraphs) {
 
 float Graph::benchExecution() {
   if (nodeMemMap.size() < nodes.size()) {
-    nodeMemMap = nodeMem();
+    freeMem();
+    nodeMemMap = nodeMem(sorted);
   }
 
-  // warmup
+  int inputTill = 0;
   for (int i = 0; i < sorted.size(); i++) {
-    if (sorted[i]->operation == Oper::INPUT)
-      continue;
+    if (sorted[i]->operation != Oper::INPUT) {
+      inputTill = i;
+      break;
+    }
+  }
+
+  cudaGraph_t graph;
+  cudaGraphExec_t graphExec;
+
+  cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+  for (int i = inputTill; i < sorted.size(); i++) {
     dispatchNode(sorted[i], nodeMemMap, 0);
   }
+  cudaStreamEndCapture(0, &graph);
+  cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
+
+  // warmup
+  cudaGraphLaunch(graphExec, 0);
   cudaDeviceSynchronize();
 
   cudaEvent_t start, stop;
@@ -375,11 +434,7 @@ float Graph::benchExecution() {
 
   cudaEventRecord(start);
   for (int run = 0; run < 100; run++) {
-    for (int i = 0; i < sorted.size(); i++) {
-      if (sorted[i]->operation == Oper::INPUT)
-        continue;
-      dispatchNode(sorted[i], nodeMemMap, 0);
-    }
+    cudaGraphLaunch(graphExec, 0);
   }
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -388,13 +443,15 @@ float Graph::benchExecution() {
   cudaEventElapsedTime(&ms, start, stop);
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
+  cudaGraphExecDestroy(graphExec);
+  cudaGraphDestroy(graph);
 
   return ms / 100.0f;
 }
 
 float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
-  nodeMemMap.clear();
-  nodeMemMap = nodeMem();
+  freeMem();
+  nodeMemMap = nodeMem(fusedGraphs);
 
   // Assign streams for parallel execution
   assignStreams(fusedGraphs);
@@ -408,21 +465,71 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
     }
   }
 
-  // warmup — with streams
+  // Pre-create events for syncMergePoint since we can't safely dynamically
+  // create them during capture
+  for (int i = inputTill; i < fusedGraphs.size(); i++) {
+    Node *n = fusedGraphs[i];
+    int myStream = nodeStreamId.count(n->id) ? nodeStreamId[n->id] : 0;
+    std::set<int> inputStreams;
+    for (Node *inp : n->inputs) {
+      if (nodeStreamId.count(inp->id)) {
+        int s = nodeStreamId[inp->id];
+        if (s != myStream)
+          inputStreams.insert(s);
+      }
+    }
+    for (int s : inputStreams) {
+      for (Node *inp : n->inputs) {
+        if (nodeStreamId.count(inp->id) && nodeStreamId[inp->id] == s) {
+          if (!nodeEvents.count(inp->id)) {
+            cudaEvent_t ev;
+            cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+            nodeEvents[inp->id] = ev;
+          }
+        }
+      }
+    }
+  }
+
+  cudaGraph_t graph;
+  cudaGraphExec_t graphExec;
+
+  cudaStreamBeginCapture(streams[0], cudaStreamCaptureModeGlobal);
+
   for (int i = inputTill; i < fusedGraphs.size(); i++) {
     Node *n = fusedGraphs[i];
     int sid = nodeStreamId.count(n->id) ? nodeStreamId[n->id] : 0;
     cudaStream_t stream = (sid < (int)streams.size()) ? streams[sid] : 0;
+
+    // Instead of creating events, this will reuse the pre-created ones and
+    // record/wait
     syncMergePoint(n, nodeStreamId, nodeEvents, streams);
+
     dispatchNode(n, nodeMemMap, stream);
   }
-  cudaDeviceSynchronize();
 
-  // Clear events from warmup
-  for (auto &kv : nodeEvents) {
-    cudaEventDestroy(kv.second);
+  // Fork-join: ensure all child streams finish before the main stream's graph
+  // capture completes
+  std::vector<cudaEvent_t> captureSyncEvents;
+  for (int s = 1; s < numStreams; s++) {
+    cudaEvent_t syncEvent;
+    cudaEventCreateWithFlags(&syncEvent, cudaEventDisableTiming);
+    cudaEventRecord(syncEvent, streams[s]);
+    cudaStreamWaitEvent(streams[0], syncEvent, 0);
+    captureSyncEvents.push_back(syncEvent);
   }
-  nodeEvents.clear();
+
+  cudaStreamEndCapture(streams[0], &graph);
+  cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
+
+  // Cleanup the temporary fork-join events used during capture
+  for (auto ev : captureSyncEvents) {
+    cudaEventDestroy(ev);
+  }
+
+  // warmup
+  cudaGraphLaunch(graphExec, streams[0]);
+  cudaDeviceSynchronize();
 
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
@@ -430,23 +537,7 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
 
   cudaEventRecord(start);
   for (int run = 0; run < 100; run++) {
-    // Clear events from previous iteration
-    for (auto &kv : nodeEvents) {
-      cudaEventDestroy(kv.second);
-    }
-    nodeEvents.clear();
-
-    for (int i = inputTill; i < fusedGraphs.size(); i++) {
-      Node *n = fusedGraphs[i];
-      int sid = nodeStreamId.count(n->id) ? nodeStreamId[n->id] : 0;
-      cudaStream_t stream = (sid < (int)streams.size()) ? streams[sid] : 0;
-      syncMergePoint(n, nodeStreamId, nodeEvents, streams);
-      dispatchNode(n, nodeMemMap, stream);
-    }
-    // Sync all streams at end of each iteration to ensure correct ordering
-    for (int s = 0; s < numStreams; s++) {
-      cudaStreamSynchronize(streams[s]);
-    }
+    cudaGraphLaunch(graphExec, streams[0]);
   }
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -455,6 +546,8 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
   cudaEventElapsedTime(&ms, start, stop);
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
+  cudaGraphExecDestroy(graphExec);
+  cudaGraphDestroy(graph);
 
   return ms / 100.0f;
 }

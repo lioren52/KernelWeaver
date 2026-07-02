@@ -28,6 +28,7 @@ public:
   float *bufferAlloc(Node *node);
 
   std::unordered_map<int, float *> nodeMem();
+  std::unordered_map<int, float *> nodeMem(const std::vector<Node *> &schedule);
 
   void generator();
 
@@ -68,5 +69,6 @@ public:
   // ── Stream management ──
   void assignStreams(const std::vector<Node *> &schedule);
   void destroyStreams();
+  void freeMem();
   ~Graph();
 };
