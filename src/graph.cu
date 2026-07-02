@@ -414,29 +414,32 @@ float Graph::benchExecution() {
     }
   }
 
+  cudaStream_t execStream;
+  cudaStreamCreate(&execStream);
+
   cudaGraph_t graph;
   cudaGraphExec_t graphExec;
 
-  cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+  cudaStreamBeginCapture(execStream, cudaStreamCaptureModeGlobal);
   for (int i = inputTill; i < sorted.size(); i++) {
-    dispatchNode(sorted[i], nodeMemMap, 0);
+    dispatchNode(sorted[i], nodeMemMap, execStream);
   }
-  cudaStreamEndCapture(0, &graph);
+  cudaStreamEndCapture(execStream, &graph);
   cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
 
   // warmup
-  cudaGraphLaunch(graphExec, 0);
-  cudaDeviceSynchronize();
+  cudaGraphLaunch(graphExec, execStream);
+  cudaStreamSynchronize(execStream);
 
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
-  cudaEventRecord(start);
+  cudaEventRecord(start, execStream);
   for (int run = 0; run < 100; run++) {
-    cudaGraphLaunch(graphExec, 0);
+    cudaGraphLaunch(graphExec, execStream);
   }
-  cudaEventRecord(stop);
+  cudaEventRecord(stop, execStream);
   cudaEventSynchronize(stop);
 
   float ms = 0;
@@ -445,6 +448,7 @@ float Graph::benchExecution() {
   cudaEventDestroy(stop);
   cudaGraphExecDestroy(graphExec);
   cudaGraphDestroy(graph);
+  cudaStreamDestroy(execStream);
 
   return ms / 100.0f;
 }
@@ -529,17 +533,17 @@ float Graph::benchExecution(std::vector<Node *> fusedGraphs) {
 
   // warmup
   cudaGraphLaunch(graphExec, streams[0]);
-  cudaDeviceSynchronize();
+  cudaStreamSynchronize(streams[0]);
 
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
-  cudaEventRecord(start);
+  cudaEventRecord(start, streams[0]);
   for (int run = 0; run < 100; run++) {
     cudaGraphLaunch(graphExec, streams[0]);
   }
-  cudaEventRecord(stop);
+  cudaEventRecord(stop, streams[0]);
   cudaEventSynchronize(stop);
 
   float ms = 0;
