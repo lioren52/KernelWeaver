@@ -92,7 +92,7 @@ int main() {
 
     std::cout << "Executing FUSED Graph" << std::endl;
     graph.execute(fusionList);
-    float fusedMs   = graph.benchExecution(fusedList);
+    float fusedMs   = graph.benchExecution(fusionList);
 
     std::cout << std::endl;
     std::cout << std::endl;
