@@ -1124,6 +1124,17 @@ void Graph::compileToFile(const std::string &filename, const std::vector<Node *>
         Node *n = targetGraphs[i];
         if (n->operation == Oper::INPUT) {
             size_t bytes = n->shape[0] * n->shape[1] * sizeof(float);
+            
+            // If the input file (like X.bin) doesn't exist during compilation, generate it on the fly
+            // so that the emitted C++ program can successfully load it at runtime!
+            std::string filename = n->name + ".bin";
+            std::ifstream file(filename);
+            if (!file.good()) {
+                generateAndSaveInput(n);
+            } else {
+                file.close();
+            }
+
             out << "    {\n";
             out << "        std::vector<float> cont = readFloatsFromFile(\"" << n->name << ".bin\", " << bytes << ");\n";
             out << "        if (cont.empty()) {\n";
