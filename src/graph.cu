@@ -57,7 +57,6 @@ void Graph::execute() {
             std::vector<float> cont = readFloatsFromFile(sorted[i]->name+".bin", byteSize);
 
             cudaMemcpy(nodeMemMap[sorted[i]->id], cont.data(), byteSize, cudaMemcpyHostToDevice);
-            std::cout << "Inputing from " << sorted[i]->name << std::endl;
         } else {
             inputTill = i;
             break;
@@ -85,7 +84,6 @@ void Graph::execute() {
             matReLU(nodeMemMap[sorted[i]->inputs[0]->id], nodeMemMap[sorted[i]->id], height, width);
         }
 
-        std::cout << "At " << sorted[i]->name << std::endl;
     }
 
     Node* node = getOutput();
@@ -93,7 +91,7 @@ void Graph::execute() {
     std::cout << std::endl;
     std::cout << "Final Node: " << node->name << std::endl;
     cudaMemcpy(output.data(), nodeMemMap[node->id], node->shape[0] * node->shape[1] * sizeof(float), cudaMemcpyDeviceToHost);
-    writeVectorToFile(output.data(), output.size(), node->name);
+    writeVectorToFile(output.data(), output.size(), node->name+".bin");
 }
 
 void Graph::execute(std::vector<Node*> fusedGraphs) {
@@ -108,7 +106,6 @@ void Graph::execute(std::vector<Node*> fusedGraphs) {
             std::vector<float> cont = readFloatsFromFile(fusedGraphs[i]->name+".bin", byteSize);
 
             cudaMemcpy(nodeMemMap[fusedGraphs[i]->id], cont.data(), byteSize, cudaMemcpyHostToDevice);
-            std::cout << "Inputing from " << fusedGraphs[i]->name << std::endl;
         } else {
             inputTill = i;
             break;
@@ -183,8 +180,6 @@ void Graph::execute(std::vector<Node*> fusedGraphs) {
 
             matMulAdd(A, B, Bias, C, row_A, N, col_B);
         }
-
-        std::cout << "At " << fusedGraphs[i]->name << std::endl;
     }
 
     Node* node = fusedGraphs[fusedGraphs.size()-1];
@@ -192,7 +187,7 @@ void Graph::execute(std::vector<Node*> fusedGraphs) {
     std::cout << std::endl;
     std::cout << "Final Node: " << node->name << std::endl;
     cudaMemcpy(output.data(), nodeMemMap[node->id], node->shape[0] * node->shape[1] * sizeof(float), cudaMemcpyDeviceToHost);
-    writeVectorToFile(output.data(), output.size(), node->name+"_fusedGraph");
+    writeVectorToFile(output.data(), output.size(), node->name+"_fusedGraph.bin");
 }
 
 float Graph::benchExecution() {
