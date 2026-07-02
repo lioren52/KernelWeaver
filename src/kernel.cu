@@ -172,24 +172,37 @@ __global__ void matrixMulFast(float *A, float *B, float *C, int M, int K,
 // Vectorized element-wise Add kernel (float4).
 // Falls back to scalar for the tail elements when total is not a multiple of 4.
 // ─────────────────────────────────────────────────────────────────────────────
-__global__ void matrixAdd(float *A, float *B, float *C, int total) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void matrixAdd(float *A, float *B, float *C, int height, int width, int b_rows, int b_cols) {
+  int col4 = blockIdx.x * blockDim.x + threadIdx.x;
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
 
-  // Each thread processes 4 consecutive floats via float4
-  int idx4 = idx * 4;
-  if (idx4 + 3 < total) {
-    float4 a = reinterpret_cast<float4 *>(A)[idx];
-    float4 b = reinterpret_cast<float4 *>(B)[idx];
+  if (row >= height || col4 * 4 >= width) return;
+
+  int b_stride_y = (b_rows > 1) ? width : 0;
+  int b_stride_x = (b_cols > 1) ? 1 : 0;
+
+  int idx = row * width + col4 * 4;
+  int b_idx = row * b_stride_y + col4 * 4 * b_stride_x;
+
+  if (col4 * 4 + 3 < width) {
+    float4 a = reinterpret_cast<float4 *>(&A[idx])[0];
+    float4 b;
+    if (b_cols > 1) {
+      b = reinterpret_cast<float4 *>(&B[b_idx])[0];
+    } else {
+      float val = B[row * b_stride_y];
+      b.x = val; b.y = val; b.z = val; b.w = val;
+    }
     float4 c;
     c.x = a.x + b.x;
     c.y = a.y + b.y;
     c.z = a.z + b.z;
     c.w = a.w + b.w;
-    reinterpret_cast<float4 *>(C)[idx] = c;
+    reinterpret_cast<float4 *>(&C[idx])[0] = c;
   } else {
-    // Scalar tail
-    for (int j = 0; j < 4 && idx4 + j < total; j++) {
-      C[idx4 + j] = A[idx4 + j] + B[idx4 + j];
+    for (int j = 0; j < 4 && col4 * 4 + j < width; j++) {
+      int b_j = row * b_stride_y + (col4 * 4 + j) * b_stride_x;
+      C[idx + j] = A[idx + j] + B[b_j];
     }
   }
 }
@@ -228,14 +241,13 @@ void matMul(float *A, float *B, float *C, int row_A, int N, int col_B,
                                                        col_B);
 }
 
-void matAdd(float *A, float *B, float *C, int height, int width,
+void matAdd(float *A, float *B, float *C, int height, int width, int b_rows, int b_cols,
             cudaStream_t stream) {
-  int total = height * width;
-  // Each thread handles 4 elements, so we need total/4 threads (rounded up)
-  int numThreads = 256;
-  int numBlocks = (total / 4 + numThreads - 1) / numThreads;
+  dim3 numThreads(32, 8); // 256 threads
+  dim3 numBlocks(((width + 3) / 4 + numThreads.x - 1) / numThreads.x, 
+                 (height + numThreads.y - 1) / numThreads.y);
 
-  matrixAdd<<<numBlocks, numThreads, 0, stream>>>(A, B, C, total);
+  matrixAdd<<<numBlocks, numThreads, 0, stream>>>(A, B, C, height, width, b_rows, b_cols);
 }
 
 void matReLU(float *A, float *C, int height, int width, cudaStream_t stream) {
@@ -364,41 +376,56 @@ void matMulReLU(float *A, float *B, float *C, int row_A, int N, int col_B,
 // =====================================================================
 // 2. FUSED: Matrix Addition + ReLU (AR) — vectorized with float4
 // =====================================================================
-__global__ void matrixAddReLU(float *A, float *B, float *C, int total) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void matrixAddReLU(float *A, float *B, float *C, int height, int width, int b_rows, int b_cols) {
+  int col4 = blockIdx.x * blockDim.x + threadIdx.x;
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
 
-  int idx4 = idx * 4;
-  if (idx4 + 3 < total) {
-    float4 a = reinterpret_cast<float4 *>(A)[idx];
-    float4 b = reinterpret_cast<float4 *>(B)[idx];
+  if (row >= height || col4 * 4 >= width) return;
+
+  int b_stride_y = (b_rows > 1) ? width : 0;
+  int b_stride_x = (b_cols > 1) ? 1 : 0;
+
+  int idx = row * width + col4 * 4;
+  int b_idx = row * b_stride_y + col4 * 4 * b_stride_x;
+
+  if (col4 * 4 + 3 < width) {
+    float4 a = reinterpret_cast<float4 *>(&A[idx])[0];
+    float4 b;
+    if (b_cols > 1) {
+      b = reinterpret_cast<float4 *>(&B[b_idx])[0];
+    } else {
+      float val = B[row * b_stride_y];
+      b.x = val; b.y = val; b.z = val; b.w = val;
+    }
     float4 c;
     c.x = fmaxf(0.0f, a.x + b.x);
     c.y = fmaxf(0.0f, a.y + b.y);
     c.z = fmaxf(0.0f, a.z + b.z);
     c.w = fmaxf(0.0f, a.w + b.w);
-    reinterpret_cast<float4 *>(C)[idx] = c;
+    reinterpret_cast<float4 *>(&C[idx])[0] = c;
   } else {
-    for (int j = 0; j < 4 && idx4 + j < total; j++) {
-      float val = A[idx4 + j] + B[idx4 + j];
-      C[idx4 + j] = fmaxf(0.0f, val);
+    for (int j = 0; j < 4 && col4 * 4 + j < width; j++) {
+      int b_j = row * b_stride_y + (col4 * 4 + j) * b_stride_x;
+      float val = A[idx + j] + B[b_j];
+      C[idx + j] = fmaxf(0.0f, val);
     }
   }
 }
 
-void matAddReLU(float *A, float *B, float *C, int height, int width,
+void matAddReLU(float *A, float *B, float *C, int height, int width, int b_rows, int b_cols,
                 cudaStream_t stream) {
-  int total = height * width;
-  int numThreads = 256;
-  int numBlocks = (total / 4 + numThreads - 1) / numThreads;
+  dim3 numThreads(32, 8); // 256 threads
+  dim3 numBlocks(((width + 3) / 4 + numThreads.x - 1) / numThreads.x, 
+                 (height + numThreads.y - 1) / numThreads.y);
 
-  matrixAddReLU<<<numBlocks, numThreads, 0, stream>>>(A, B, C, total);
+  matrixAddReLU<<<numBlocks, numThreads, 0, stream>>>(A, B, C, height, width, b_rows, b_cols);
 }
 
 // =====================================================================
 // 3. FUSED: Matrix Multiplication + Addition (MA)
 // =====================================================================
 __global__ void matrixMulFastAdd(float *A, float *B, float *Bias, float *C,
-                                 int M, int K, int N) {
+                                 int M, int K, int N, int b_rows, int b_cols) {
   __shared__ float As[BM][BK + AS_PAD];
   __shared__ float Bs[BK][BN];
 
@@ -496,27 +523,30 @@ __global__ void matrixMulFastAdd(float *A, float *B, float *Bias, float *C,
     __syncthreads();
   }
   // Epilogue: add bias
+  int b_stride_y = (b_rows > 1) ? N : 0;
+  int b_stride_x = (b_cols > 1) ? 1 : 0;
+
   for (int m = 0; m < TM; m++)
     for (int n = 0; n < TN; n++)
       if (out_row + m < M && out_col + n < N) {
         C[(out_row + m) * N + out_col + n] =
-            reg_C[m][n] + Bias[(out_row + m) * N + (out_col + n)];
+            reg_C[m][n] + Bias[(out_row + m) * b_stride_y + (out_col + n) * b_stride_x];
       }
 }
 
 void matMulAdd(float *A, float *B, float *Bias, float *C, int row_A, int N,
-               int col_B, cudaStream_t stream) {
+               int col_B, int b_rows, int b_cols, cudaStream_t stream) {
   dim3 threadPerBlock(16, 16);
   dim3 blocks((col_B + BN - 1) / BN, (row_A + BM - 1) / BM);
   matrixMulFastAdd<<<blocks, threadPerBlock, 0, stream>>>(A, B, Bias, C, row_A,
-                                                          N, col_B);
+                                                          N, col_B, b_rows, b_cols);
 }
 
 // =====================================================================
 // 4. FUSED: Matrix Multiplication + Addition + ReLU (MAR)
 // =====================================================================
 __global__ void matrixMulFastAddReLU(float *A, float *B, float *Bias, float *C,
-                                     int M, int K, int N) {
+                                     int M, int K, int N, int b_rows, int b_cols) {
   __shared__ float As[BM][BK + AS_PAD];
   __shared__ float Bs[BK][BN];
 
@@ -614,18 +644,21 @@ __global__ void matrixMulFastAddReLU(float *A, float *B, float *Bias, float *C,
     __syncthreads();
   }
   // Epilogue: add bias and apply ReLU
+  int b_stride_y = (b_rows > 1) ? N : 0;
+  int b_stride_x = (b_cols > 1) ? 1 : 0;
+
   for (int m = 0; m < TM; m++)
     for (int n = 0; n < TN; n++)
       if (out_row + m < M && out_col + n < N) {
-        float val = reg_C[m][n] + Bias[(out_row + m) * N + (out_col + n)];
+        float val = reg_C[m][n] + Bias[(out_row + m) * b_stride_y + (out_col + n) * b_stride_x];
         C[(out_row + m) * N + out_col + n] = fmaxf(0.0f, val);
       }
 }
 
 void matMulAddReLU(float *A, float *B, float *Bias, float *C, int row_A, int N,
-                   int col_B, cudaStream_t stream) {
+                   int col_B, int b_rows, int b_cols, cudaStream_t stream) {
   dim3 threadPerBlock(16, 16);
   dim3 blocks((col_B + BN - 1) / BN, (row_A + BM - 1) / BM);
   matrixMulFastAddReLU<<<blocks, threadPerBlock, 0, stream>>>(A, B, Bias, C,
-                                                              row_A, N, col_B);
+                                                              row_A, N, col_B, b_rows, b_cols);
 }

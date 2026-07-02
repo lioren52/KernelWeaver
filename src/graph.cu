@@ -240,8 +240,10 @@ static void dispatchNode(Node *node, std::unordered_map<int, float *> &mem,
   } else if (node->operation == Oper::ADD) {
     int height = node->shape[0];
     int width = node->shape[1];
+    int b_rows = node->inputs[1]->shape[0];
+    int b_cols = node->inputs[1]->shape[1];
     matAdd(mem[node->inputs[0]->id], mem[node->inputs[1]->id], mem[node->id],
-           height, width, stream);
+           height, width, b_rows, b_cols, stream);
 
   } else if (node->operation == Oper::ReLU) {
     int height = node->shape[0];
@@ -258,24 +260,30 @@ static void dispatchNode(Node *node, std::unordered_map<int, float *> &mem,
   } else if (node->operation == Oper::FUSED_AR) {
     int height = node->shape[0];
     int width = node->shape[1];
-    matAddReLU(mem[node->inputs[0]->id], mem[node->inputs.back()->id],
-               mem[node->id], height, width, stream);
-
-  } else if (node->operation == Oper::FUSED_MAR) {
-    int row_A = node->inputs[0]->shape[0];
-    int N = node->inputs[0]->shape[1];
-    int col_B = node->inputs[1]->shape[1];
-    matMulAddReLU(mem[node->inputs[0]->id], mem[node->inputs[1]->id],
-                  mem[node->inputs.back()->id], mem[node->id], row_A, N, col_B,
-                  stream);
+    int b_rows = node->inputs[1]->shape[0];
+    int b_cols = node->inputs[1]->shape[1];
+    matAddReLU(mem[node->inputs[0]->id], mem[node->inputs[1]->id],
+               mem[node->id], height, width, b_rows, b_cols, stream);
 
   } else if (node->operation == Oper::FUSED_MA) {
     int row_A = node->inputs[0]->shape[0];
     int N = node->inputs[0]->shape[1];
     int col_B = node->inputs[1]->shape[1];
+    int b_rows = node->inputs[2]->shape[0];
+    int b_cols = node->inputs[2]->shape[1];
     matMulAdd(mem[node->inputs[0]->id], mem[node->inputs[1]->id],
-              mem[node->inputs.back()->id], mem[node->id], row_A, N, col_B,
+              mem[node->inputs[2]->id], mem[node->id], row_A, N, col_B, b_rows, b_cols,
               stream);
+
+  } else if (node->operation == Oper::FUSED_MAR) {
+    int row_A = node->inputs[0]->shape[0];
+    int N = node->inputs[0]->shape[1];
+    int col_B = node->inputs[1]->shape[1];
+    int b_rows = node->inputs[2]->shape[0];
+    int b_cols = node->inputs[2]->shape[1];
+    matMulAddReLU(mem[node->inputs[0]->id], mem[node->inputs[1]->id],
+                  mem[node->inputs[2]->id], mem[node->id], row_A, N, col_B, b_rows, b_cols,
+                  stream);
   }
 }
 
@@ -801,9 +809,13 @@ Node *Graph::addNode(std::string nm, Oper op, std::vector<Node *> in) {
       std::cout << "Error: input for addition is given: " << in.size() << "\n";
       return nullptr;
     }
-    if (in[0]->shape[0] != in[1]->shape[0] ||
-        in[0]->shape[1] != in[1]->shape[1]) {
-      std::cout << "Error: ADD shape mismatch\n";
+    bool exact_match = (in[0]->shape[0] == in[1]->shape[0] && in[0]->shape[1] == in[1]->shape[1]);
+    bool broadcast_match = ((in[1]->shape[0] == 1 && in[1]->shape[1] == in[0]->shape[1]) || 
+                            (in[1]->shape[1] == 1 && in[1]->shape[0] == in[0]->shape[0]));
+    
+    if (!exact_match && !broadcast_match) {
+      std::cout << "Error: ADD shape mismatch (" << in[0]->shape[0] << "x" << in[0]->shape[1] << " + "
+                << in[1]->shape[0] << "x" << in[1]->shape[1] << ")\n";
       return nullptr;
     }
     sp = in[0]->shape;
