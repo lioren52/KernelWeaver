@@ -196,12 +196,19 @@ In practice, expect anywhere from **~1.1x to ~2x+ speedup** from the fusion pass
 | Fused MatMul+Add+ReLU | ✅ |
 | Conv2D, Softmax, LayerNorm, etc. | ❌ Not yet |
 
+
+## Known Issues & Limitations
+- **ONNX import is limited** — The exporter (`onnx_exporter.py`) only handles `Gemm`, `MatMul`, `Add`, and `Relu` ops. Anything else (BatchNorm, Reshape, Flatten, Transpose, Concat, etc.) is silently skipped, which will produce a broken or incomplete graph. Stick to simple MLP/linear architectures. The `Gemm` handling also assumes specific `transB` conventions — non-standard ONNX attribute combinations may produce incorrectly transposed weights.
+- **No `cudaFree` in generated code** — The `--codegen` output emits `cudaMalloc` for all buffers but never emits any `cudaFree` calls. The runtime compiler relies on the `Graph` destructor to clean up, but standalone generated programs will leak all GPU memory until process exit.
+- **No CUDA error checking** — `cudaMalloc`, `cudaMemcpy`, stream/event creation, and kernel launches all return error codes that are currently never checked. A failed allocation (e.g., running out of VRAM on large graphs) will silently produce garbage output with no warning.
+- **Shapes are 2D only** — Everything internally assumes `shape` is exactly `{rows, cols}`. There's no support for batched 3D tensors, 1D vectors, or higher-dimensional inputs without manually reshaping them to 2D first.
+- **`--standalone` codegen is WIP** — The `--standalone` flag (which injects kernel source code into the generated `.cu` file) currently has bugs and may produce files that don't compile. Use `--codegen` without `--standalone` for now.
+- **Fusion pass is single-use** — The `fusionPass()` method uses node-ID-indexed vectors sized to the current graph. Calling it a second time after new fused nodes have been created risks out-of-bounds access since fused nodes get IDs beyond the original array bounds.
+
+
 ## The Journey
 
 This project started as a way to really understand what happens under the hood of ML compilers — not just the theory, but the actual GPU mechanics. Writing tiled matmul kernels from scratch, debugging shared memory bank conflicts, figuring out CUDA stream capture semantics for benchmarking, getting operator fusion to correctly rewire graph edges... every piece of it was a learning experience.
 
 It's not a production compiler and it doesn't try to be one. But building it from the ground up — no cuBLAS, no cuDNN, no framework magic — was one heck of a journey, and genuinely one of the most fun projects I've worked on.
 
-## License
-
-MIT
