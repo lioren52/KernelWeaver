@@ -1,4 +1,4 @@
-# graph-to-cuda
+# KernelWeaver
 
 A neural network graph compiler built from scratch in C++/CUDA. No frameworks, no cuBLAS, no cuDNN — just raw CUDA kernels, a custom IR, and a whole lot of fun building it.
 
