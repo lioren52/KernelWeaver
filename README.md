@@ -1,54 +1,154 @@
-# graph-to-cuda
+# KernelWeaver
 
 A neural network graph compiler built from scratch in C++/CUDA. No frameworks, no cuBLAS, no cuDNN — just raw CUDA kernels, a custom IR, and a whole lot of fun building it.
 
 Takes a computation graph (hardcoded or imported from ONNX), runs operator fusion, schedules it across multiple CUDA streams, and either executes it on the GPU or emits a standalone `.cu` file you can compile and run independently.
 
-## What It Actually Does
+## Compiler Pipeline
 
 ```
-PyTorch Model (.pt)
-       │
-       ▼
-   ONNX Export
-       │
-       ▼
- onnx_exporter.py ──► Text IR (.graph)
-       │                    │
-       ▼                    ▼
-              Graph IR (C++ Nodes)
-                     │
-                     ▼
-              Topological Sort
-                     │
-                     ▼
-              Fusion Pass (DFS)
-               ┌─────┴─────┐
-               ▼           ▼
-          GPU Execute   Code Generation
-          + Benchmark   (generated_model.cu)
+             PyTorch Model
+                    │
+                    ▼
+             ONNX Frontend
+                    │
+                    ▼
+          Frontend Import Pass
+                    │
+                    ▼
+        Custom Intermediate Representation
+                    │
+         ┌──────────┴──────────┐
+         ▼                     ▼
+ Dependency Analysis      Shape Resolution
+         │
+         ▼
+ Topological Scheduling
+         │
+         ▼
+ Pattern-Based Fusion Pass
+         │
+         ▼
+ GPU Memory Planning
+         │
+         ▼
+ Stream Scheduling
+         │
+         ▼
+ CUDA Backend
+         │
+         ├─────────────┐
+         ▼             ▼
+ Runtime Execute   CUDA Codegen
+                    (.cu)
 ```
 
-**The pipeline in a nutshell:**
+KernelWeaver follows a traditional compiler architecture adapted for neural network computation graphs.
 
-1. **Build the Graph** — Either define it in C++ or import from an ONNX model via the Python exporter
-2. **Topological Sort** — Schedule nodes respecting data dependencies
-3. **Operator Fusion** — DFS-based pattern matching fuses chains like `MatMul → Add → ReLU` into single kernels
-4. **Stream Assignment** — Detect fork/join points and assign independent branches to separate CUDA streams
-5. **Execute or Codegen** — Run it directly (with benchmarking via CUDA Graph capture) or emit a self-contained `.cu` file
+### Frontend
 
-## The Kernels
+Models can either be
 
-Everything is hand-written. The matmul kernel uses:
+- Constructed directly in C++
+- Imported from ONNX via a Python frontend
 
-- **Warp-level tiling** (BM=64, BN=64, BK=32 with 4×4 register tiles)
-- **Vectorized `float4` loads** with alignment-aware fallback paths
-- **Shared memory bank-conflict padding** (`AS_PAD`)
-- **Arbitrary dimension support** — no power-of-2 constraints, handles remainder phases cleanly
+The frontend lowers the network into a lightweight custom intermediate representation consisting of graph nodes representing tensor operations.
 
-Four fused kernel variants eliminate intermediate global memory traffic:
+### Optimization Passes
 
-| Fusion Pattern | What It Does |
+Once imported, the compiler performs several graph-level optimization passes:
+
+- Dependency analysis
+- Topological scheduling
+- Pattern-based operator fusion
+- Multi-stream scheduling
+- GPU memory planning through liveness analysis
+
+### Backend
+
+The optimized graph can then either
+
+- Execute directly through the runtime
+- Be lowered into standalone CUDA source code for independent compilation.
+
+## Frontend (ONNX Import)
+
+A lightweight Python frontend imports ONNX models and lowers supported operators into the compiler's custom intermediate representation.
+
+Currently supported ONNX operators include
+
+- Gemm
+- MatMul
+- Add
+- ReLU
+
+Model weights are exported as binary blobs while graph structure is emitted as a simple textual IR consumed by the compiler.
+
+## Intermediate Representation
+
+KernelWeaver uses a lightweight line-oriented intermediate representation describing
+
+- Inputs
+- Operators
+- Data dependencies
+- Outputs
+
+Example
+
+```text
+INPUT X 128 64
+INPUT W 64 32
+MATMUL mm X W
+ADD add mm bias
+RELU out add
+OUTPUT out
+```
+
+This representation serves as the compiler's internal graph description before optimization and backend lowering.
+
+## Memory Planning
+
+Rather than allocating a new GPU buffer for every intermediate tensor, the compiler performs liveness analysis to determine when tensors become dead.
+
+Buffers whose final consumer has completed execution are recycled through a size-indexed free list, reducing GPU memory consumption and allocation overhead.
+
+Input tensors remain resident throughout execution since they correspond to persistent model parameters.
+
+## Runtime Scheduler
+
+Independent branches within the computation graph are scheduled onto separate CUDA streams.
+
+Merge points synchronize execution through CUDA events (`cudaEventRecord` / `cudaStreamWaitEvent`).
+
+For benchmarking, the complete execution graph is captured using CUDA Graphs, allowing low-overhead replay while preserving the optimized execution schedule.
+
+## Backend: CUDA Code Generation
+
+The backend lowers optimized graph nodes into hand-written CUDA kernels.
+
+The generated execution schedule invokes specialized kernels for
+
+- MatMul
+- Add
+- ReLU
+- MatMul + ReLU
+- MatMul + Add
+- Add + ReLU
+- MatMul + Add + ReLU
+
+The matrix multiplication backend implements
+
+- Warp-level tiling
+- Register blocking
+- Shared-memory tiling
+- Vectorized float4 memory operations
+- Shared-memory bank-conflict avoidance
+
+Fusion occurs at the backend by folding element-wise operations directly into the GEMM epilogue, eliminating intermediate global memory traffic and unnecessary kernel launches.
+
+## Supported Operators
+
+| Operation | Status |
 |---|---|
 | `FUSED_MR` | MatMul + ReLU (activation fused into matmul epilogue) |
 | `FUSED_AR` | Add + ReLU (vectorized `float4` element-wise) |
@@ -68,7 +168,7 @@ Independent branches in the graph (e.g., parallel paths that fork from the same 
 ## Project Structure
 
 ```
-graph-to-cuda/
+KernelWeaver/
 ├── main.cu                  # Entry point, CLI args, hardcoded benchmark graph
 ├── include/
 │   ├── node.h               # Node class & Oper enum (MATMUL, ADD, ReLU, fused ops)
@@ -131,7 +231,7 @@ Generate a standalone `.cu` file from the optimized graph:
 
 This emits `generated_model.cu` with all kernel calls, stream creation, event synchronization, and memory management baked in.
 
-### Loading from ONNX
+### Running with ONNX Models
 
 **Step 1:** Export your PyTorch model to ONNX:
 
